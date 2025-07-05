@@ -4,9 +4,10 @@ import requests
 
 app = FastAPI()
 
-# Rajapintojen osoitteet
 MML_WMS_KORKEUS = "https://avoin-karttakuva.maanmittauslaitos.fi/maasto/wms"
 MML_WFS_KIINTEISTO = "https://avoindata.maanmittauslaitos.fi/geoserver/kiinteisto/wfs"
+GTK_WMS_MAAPERA = "https://gtkdata.gtk.fi/arcgis/services/GTKWMS/MapServer/WMSServer"
+SYKE_WMS_TULVA = "https://paikkatieto.ymparisto.fi/arcgis/services/INSPIRE/Tulvakartat/MapServer/WMSServer"
 
 @app.get("/analyysi", response_class=HTMLResponse)
 def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
@@ -14,13 +15,14 @@ def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
         "input_coords": {"lat": lat, "lon": lon},
         "korkeus": None,
         "kiinteisto": None,
-        "maaperaluokka": "(tuki tulossa)",
-        "tulvariski": "(tuki tulossa)"
+        "maaperaluokka": "(ei haettu)",
+        "tulvariski": "(ei haettu)"
     }
+
+    bbox = f"{lon},{lat},{lon+0.0005},{lat+0.0005}"
 
     # 1. Korkeus
     try:
-        bbox = f"{lon},{lat},{lon+0.0005},{lat+0.0005}"
         params = {
             "SERVICE": "WMS",
             "VERSION": "1.1.1",
@@ -40,7 +42,7 @@ def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
     except Exception as e:
         result["korkeus"] = f"Virhe: {str(e)}"
 
-    # 2. Kiinteistötiedot
+    # 2. Kiinteistötieto
     try:
         wfs_params = {
             "service": "WFS",
@@ -53,8 +55,8 @@ def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
         r = requests.get(MML_WFS_KIINTEISTO, params=wfs_params, timeout=10)
         if r.status_code == 200:
             gjson = r.json()
-            if gjson["features"]:
-                result["kiinteisto"] = gjson["features"][0]["properties"]
+            if gjson['features']:
+                result['kiinteisto'] = gjson['features'][0]['properties']
             else:
                 result["kiinteisto"] = None
         else:
@@ -62,11 +64,40 @@ def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
     except Exception as e:
         result["kiinteisto"] = f"Virhe: {str(e)}"
 
-    # 3. Rakenna HTML
+    # 3. Maaperä GTK WMS
+    try:
+        params = {
+            "SERVICE": "WMS",
+            "VERSION": "1.3.0",
+            "REQUEST": "GetFeatureInfo",
+            "LAYERS": "1",
+            "QUERY_LAYERS": "1",
+            "CRS": "EPSG:4326",
+            "INFO_FORMAT": "application/json",
+            "BBOX": bbox,
+            "WIDTH": 101,
+            "HEIGHT": 101,
+            "I": 50,
+            "J": 50
+        }
+        r = requests.get(GTK_WMS_MAAPERA, params=params, timeout=10)
+        gj = r.json()
+        result["maaperaluokka"] = gj["features"][0]["properties"].get("Maa_alue", "Ei saatavilla")
+    except Exception:
+        result["maaperaluokka"] = "Ei saatavilla"
+
+    # 4. Tulvariski SYKE
+    try:
+        params["LAYERS"] = params["QUERY_LAYERS"] = "0"
+        r = requests.get(SYKE_WMS_TULVA, params=params, timeout=10)
+        tj = r.json()
+        result["tulvariski"] = "Kyllä" if tj["features"] else "Ei"
+    except Exception:
+        result["tulvariski"] = "Ei saatavilla"
+
+    # Kiinteistö HTML
     if isinstance(result["kiinteisto"], dict):
-        kiinteisto_html = "".join(
-            [f"<li><strong>{k}:</strong> {v}</li>" for k, v in result["kiinteisto"].items()]
-        )
+        kiinteisto_html = "".join([f"<li><strong>{k}:</strong> {v}</li>" for k, v in result["kiinteisto"].items()])
     elif isinstance(result["kiinteisto"], str):
         kiinteisto_html = f"<li>{result['kiinteisto']}</li>"
     else:
