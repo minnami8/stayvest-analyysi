@@ -1,8 +1,6 @@
 from fastapi import FastAPI, Query
 from fastapi.responses import HTMLResponse
 import requests
-import xml.etree.ElementTree as ET
-from typing import Optional
 
 app = FastAPI()
 
@@ -97,7 +95,8 @@ def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
     """
 
     return HTMLResponse(content=html)
-    
-    if __name__ == "__main__":
+
+# Tämä tekee Renderissä käynnistyksestä toimivan
+if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=10000)
