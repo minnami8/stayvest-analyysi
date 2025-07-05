@@ -4,11 +4,9 @@ import requests
 
 app = FastAPI()
 
-# Constants for WMS/WFS base URLs
+# Rajapintojen osoitteet
 MML_WMS_KORKEUS = "https://avoin-karttakuva.maanmittauslaitos.fi/maasto/wms"
 MML_WFS_KIINTEISTO = "https://avoindata.maanmittauslaitos.fi/geoserver/kiinteisto/wfs"
-GTK_WMS_MAAPERA = "https://gtkdata.gtk.fi/arcgis/services/GTKWMS/MapServer/WMSServer"
-SYKE_WMS_TULVA = "https://paikkatieto.ymparisto.fi/arcgis/services/INSPIRE/Tulvakartat/MapServer/WMSServer"
 
 @app.get("/analyysi", response_class=HTMLResponse)
 def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
@@ -20,7 +18,7 @@ def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
         "tulvariski": "(tuki tulossa)"
     }
 
-    # 1. Hae korkeus WMS:llä
+    # 1. Korkeus
     try:
         bbox = f"{lon},{lat},{lon+0.0005},{lat+0.0005}"
         params = {
@@ -37,12 +35,12 @@ def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
             "HEIGHT": 101,
             "BBOX": bbox
         }
-        r = requests.get(MML_WMS_KORKEUS, params=params)
+        r = requests.get(MML_WMS_KORKEUS, params=params, timeout=10)
         result["korkeus"] = r.text.strip()
     except Exception as e:
         result["korkeus"] = f"Virhe: {str(e)}"
 
-    # 2. Kiinteistötieto WFS:llä
+    # 2. Kiinteistötiedot
     try:
         wfs_params = {
             "service": "WFS",
@@ -52,16 +50,27 @@ def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
             "outputFormat": "application/json",
             "bbox": f"{lat},{lon},{lat+0.0005},{lon+0.0005},EPSG:4326"
         }
-        r = requests.get(MML_WFS_KIINTEISTO, params=wfs_params)
+        r = requests.get(MML_WFS_KIINTEISTO, params=wfs_params, timeout=10)
         if r.status_code == 200:
             gjson = r.json()
-            if gjson['features']:
-                result['kiinteisto'] = gjson['features'][0]['properties']
+            if gjson["features"]:
+                result["kiinteisto"] = gjson["features"][0]["properties"]
+            else:
+                result["kiinteisto"] = None
+        else:
+            result["kiinteisto"] = f"Virhe: {r.status_code}"
     except Exception as e:
         result["kiinteisto"] = f"Virhe: {str(e)}"
 
-    # Rakenna HTML-analyysinäkymä
-    kiinteisto_html = "".join([f"<li><strong>{k}:</strong> {v}</li>" for k, v in (result['kiinteisto'] or {}).items()])
+    # 3. Rakenna HTML
+    if isinstance(result["kiinteisto"], dict):
+        kiinteisto_html = "".join(
+            [f"<li><strong>{k}:</strong> {v}</li>" for k, v in result["kiinteisto"].items()]
+        )
+    elif isinstance(result["kiinteisto"], str):
+        kiinteisto_html = f"<li>{result['kiinteisto']}</li>"
+    else:
+        kiinteisto_html = "<li>Ei saatavilla</li>"
 
     html = f"""
     <!DOCTYPE html>
@@ -84,7 +93,7 @@ def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
                 <li><strong>Koordinaatit:</strong> {lat:.5f}, {lon:.5f}</li>
                 <li><strong>Korkeus (KM10):</strong> {result['korkeus']}</li>
                 <li><strong>Kiinteistötiedot:</strong>
-                    <ul>{kiinteisto_html or '<li>Ei saatavilla</li>'}</ul>
+                    <ul>{kiinteisto_html}</ul>
                 </li>
                 <li><strong>Maaperä:</strong> {result['maaperaluokka']}</li>
                 <li><strong>Tulvariski:</strong> {result['tulvariski']}</li>
@@ -96,7 +105,7 @@ def analysoi_tontti(lat: float = Query(...), lon: float = Query(...)):
 
     return HTMLResponse(content=html)
 
-# Tämä tekee Renderissä käynnistyksestä toimivan
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=10000)
